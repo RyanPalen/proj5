@@ -8,6 +8,9 @@
 #include<sys/shm.h>
 #include<sys/stat.h>
 #include<sys/wait.h>
+#include <semaphore.h>
+#include <fcntl.h>
+#include <pthread.h>
 
 //Function prototypes defined below
 int detachandremove(int id, void *shmaddr);
@@ -21,7 +24,7 @@ int killStop;
 typedef struct{
 	int totalRes;
 	int usedRes;
-	int resArray[10]; //-1 in this means system has resource
+	int resArray[20]; //-2 in this means system has resource
 	int reqList[20];
 }Resource;
 
@@ -31,6 +34,8 @@ typedef struct{
 	int grantedRes[20];
 }Turn;
 
+//Global semaphore variable
+sem_t *sem;
 
 int main (int argc, char *argv[]){
 
@@ -47,6 +52,9 @@ int main (int argc, char *argv[]){
 	for (i = 0; i < 20; i++){
 		bitProc[i] = 0;
 	}
+	
+	//Semaphore
+	sem = sem_open("/mysemaphore", O_CREAT, S_IRUSR | S_IWUSR, 0);
 	
 	//Flags
 	int doneFlag = 0;
@@ -79,17 +87,22 @@ int main (int argc, char *argv[]){
 	long *clockVar;
 	Resource *resources;
 	Turn *turn;
+	int *procCount;
+	int *pidList;
 
 	//Shared memory keys
 	key_t clockKey;
 	key_t resKey;
 	key_t turnKey;
+	key_t countKey;
+	key_t pidKey;
 	
 	//Shared memory IDs
 	int clockID = 0;
 	int resID = 0;
 	int turnID = 0;
-	int msgID = 0;
+	int countID = 0;
+	int pidID = 0;
 		
 	//random seed
 	srand(time(NULL));
@@ -230,6 +243,17 @@ int main (int argc, char *argv[]){
 		return 1;
 	}
 	
+	countKey = ftok("ftok_count", 17);
+	if (countKey == -1){
+		perror("Count: Failed to load ftok file");
+		return 1;
+	}
+	
+	pidKey = ftok("ftok_pid", 17);
+	if (pidKey == -1){
+		perror("PID: Failed to load ftok file");
+		return 1;
+	}
 	
 	//--------------------------------------------------
 	//Shared Memory Initialization
@@ -283,6 +307,48 @@ int main (int argc, char *argv[]){
 		return 1;
 	}
 	
+	//Initializing shared memory for the process count array
+	countID = shmget(countKey, sizeof(int), IPC_CREAT | 0666);
+	if (countID == -1){
+		perror("Count: Failed to designate shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);		
+		detachandremove(turnID, turn);
+		return 1;
+	}
+
+	procCount = shmat(countID, NULL, 0);
+	if (procCount == (int*)-1){
+		perror("Count: Failed to attach shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);		
+		detachandremove(turnID, turn);
+		detachandremove(countID, procCount);
+		return 1;
+	}
+	
+	//Initializing shared memory for the process count array
+	pidID = shmget(pidKey, sizeof(int[20]), IPC_CREAT | 0666);
+	if (countID == -1){
+		perror("PID: Failed to designate shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);		
+		detachandremove(turnID, turn);
+		detachandremove(countID, procCount);
+		return 1;
+	}
+
+	pidList = shmat(pidID, NULL, 0);
+	if (pidList == (int*)-1){
+		perror("PID: Failed to attach shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);		
+		detachandremove(turnID, turn);
+		detachandremove(countID, procCount);
+		detachandremove(pidID, pidList);
+		return 1;
+	}
+	
 	/*--------------------------------------------------
 	----------------------------------------------------
 	---------    End shared memory section    ----------
@@ -301,45 +367,44 @@ int main (int argc, char *argv[]){
 	
 	resAvailable = rand() % (5 + 1 - 3) + 3;
 	int tempRes = resAvailable;
-	
+	fprintf(stderr, "Shared Resources = %i\n\n", resAvailable);
+		
 	for (i = 0; i < 20; i++){
-		resource[i].totalRes = 10;
+		resources[i].totalRes = 10;
+		
 		if (tempRes > 0){
-			resource[i].usedRes = 0;
-			for (j = 0; j < 10; j++){
-				resource[i].resArray[j] = -1;
-				resource[i].reqList[j] = -1;
-				tempRes--;
+			resources[i].usedRes = 0;
+			for (j = 0; j < 20; j++){
+				resources[i].resArray[j] = -1;
+				resources[i].reqList[j] = 0;
 			}
+			tempRes--;
 		}
 		else{
-			resource[i].usedRes = 10;
-			for (j = 0; j < 10; j++){
-				resource[i].resArray[j] = -2;
-				resource[i].reqList[j] = -2;
+			resources[i].usedRes = 10;
+			for (j = 0; j < 20; j++){
+				resources[i].resArray[j] = -2;
+				resources[i].reqList[j] = 0;
 			}
 		}
 	}
 	
 	procCount[0] = 0;
-	userReturn[0].state = -1;
-	
-	fprintf(stderr, "\tR0\tR1\tR2\tR3\tR4\tR5\nAv\t%i\t%i\t%i\t%i\t%i\t%i\n\n",
-		(10-resource[0].usedRes), (10-resource[1].usedRes), (10-resource[2].usedRes), (10-resource[3].usedRes), (10-resource[4].usedRes), (10-resource[5].usedRes));
 	
 	fprintf(stderr, "Available Resources\n\n");
-	for (i = 0; i < resAvailable, i++){
+	for (i = 0; i < resAvailable; i++){
 		fprintf(stderr, "\tR%i", i);
 	}
 	fprintf(stderr, "\nAv");
 	for (i = 0; i < resAvailable; i++){
-		fprintf(stderr, "\t%i", 10-resource[i].usedRes);
+		fprintf(stderr, "\t%i", 10-resources[i].usedRes);
 	}
 	fprintf(stderr, "\n\n");
 	
 	
 	//Sets start time for real max time kill condition
 	startTime = time(NULL);
+	long printTime = 1000000
 	
 	while ((time(NULL) - startTime) < maxTime && !killStop && clockTime < maxSimTime){
 		
@@ -348,6 +413,21 @@ int main (int argc, char *argv[]){
 			
 		clockVar[0] = clockTime/1000000000;
 		clockVar[1] = clockTime % 1000000000;
+		
+		if (clockTime > printTime){
+			
+			fprintf(stderr, "Available Resources\n\n");
+				for (i = 0; i < resAvailable; i++){
+					fprintf(stderr, "\tR%i", i);
+				}
+				fprintf(stderr, "\nAv");
+				for (i = 0; i < resAvailable; i++){
+					fprintf(stderr, "\t%i", 10-resources[i].usedRes);
+				}
+				fprintf(stderr, "\n\n");
+			
+			printTime += clockTime;
+		}
 		
 		//Checks against the process create time list to increase addProc
 		//addProc keeps track of how many processes need to be added
@@ -411,8 +491,78 @@ int main (int argc, char *argv[]){
 			
 			
 		}
-}
+	}
+	
+	//Closes processes with SIGTERM using shared memory to keep track of PIDs
+	for (i = 0; i < 20; i++){
+		if (pidList[i] > 0){
+			
+			if (logFlag){
+				fprintf(file, "OSS - Cleanup: Closing Process %ld\n", pidList[i]);
+			}
+			
+			fprintf(stderr, "Closing Process: %ld\n", pidList[i]);
+			
+			//SIGTERM kill of process to allow cleanup
+			kill(pidList[i], SIGTERM);
+			
+			//Checks status of process closing over the course of 10 second wait with 5 checks
+			for (j = 0; j < 8; j++){
+				killStatus = waitpid(pidList[i], &status, WNOHANG);
 
+				//Process didn't close properly, error
+				if (killStatus == -1){
+					
+					if (logFlag){
+						fprintf(file, "OSS - Cleanup: Failed to kill Process %ld\n", pidList[i]);
+					}
+					
+					perror("Kill Process Failed");
+					break;
+				}
+				//Waiting for process to finish with 2 second sleep
+				else if(killStatus == 0){
+					
+					fprintf(stderr, "Waiting for Process %ld to end...\n", pidList[i]);
+					
+					sleep(1);
+				}
+				//Process closed - provides information on close
+				else if(killStatus == pidList[i]){
+					//Process ends normally if WIFEXITED status is true
+					if (WIFEXITED(status)){
+						
+						if (logFlag){
+							fprintf(file, "OSS - Cleanup: Process %ld ended normally\n", pidList[i]);
+						}
+						
+						fprintf(stderr, "Process %ld ended normally\n", pidList[i]);
+						break;
+					}
+					//Process did not catch signal if WIFSIGNALED status true
+					else if(WIFSIGNALED(status)){
+						
+						if (logFlag){
+							fprintf(file, "OSS - Cleanup: Process %ld ended due to uncaught signal\n", pidList[i]);
+						}
+						
+						fprintf(stderr, "Process %ld ended because of uncaught signal\n", pidList[i]);
+						break;
+					}
+				}
+			}
+		}
+	}
+	
+	fprintf(stderr, "Detaching Shared Memory\n");
+	detachandremove(clockID, clockVar);
+	detachandremove(resID, resources);		
+	detachandremove(turnID, turn);
+	detachandremove(countID, procCount);
+	detachandremove(pidID, pidList);
+	
+	return 0;
+}
 
 
 //Cleans up shared memory using the Shared memory control function
@@ -432,6 +582,7 @@ int detachandremove(int id, void *shmaddr){
 	errno = error;
 	return -1;
 }
+
 
 //Function to check if process table has room and return index
 int checkProcTable(int *bitProc, int size){
