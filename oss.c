@@ -9,40 +9,112 @@
 #include<sys/stat.h>
 #include<sys/wait.h>
 
-typedef struct{
-	int totalRes;
-	int usedRes;
-	int resArray[10];
-}Resource;
-
 //Function prototypes defined below
 int detachandremove(int id, void *shmaddr);
+int checkProcTable(int *bitProc, int size);
 void sigHandler(int sig);
 long convertTime(long sec, long nano);
 
 //global variable for signal handling and breaking out of a while loop
 int killStop;
 
+typedef struct{
+	int totalRes;
+	int usedRes;
+	int resArray[10]; //-1 in this means system has resource
+	int reqList[20];
+}Resource;
+
+typedef struct{
+	int turn;
+	int turnAck;
+	int grantedRes[20];
+}Turn;
+
 
 int main (int argc, char *argv[]){
 
+	//Iterators and counters
+	int index = 0, i = 0, j = 0;
+	char c;
+	time_t startTime;
+	long clockTime = 0;
+	int addProc = 0;
+	int bitProc[20];
+	int localTurn = 0;
+	int resAvailable = 0;
+	
+	for (i = 0; i < 20; i++){
+		bitProc[i] = 0;
+	}
+	
+	//Flags
+	int doneFlag = 0;
+	int tableFull = 0;
+	
+	//Sig handling variables
+	int status = 0;
+	int killStatus = 0;
+	
+	//Misc variables
+	pid_t childPID;
+	char indexStr[5];
+	char resStr[5];
+	char timeStr[15];
+	char timeBuff[100];
+	time_t logTime = time(NULL);
+	int openProc = 0;
+	FILE *file;
+	
+	//Command line variables
+	char fileName[30];
+	int logFlag = 0;
+	int verbFlag = 0;
+	int maxTime = 2;
+	int maxProc = 30;
+	long incVal = 100;
+	long maxSimTime = 60000000000;
+	
+	//Shared memory variables
+	long *clockVar;
+	Resource *resources;
+	Turn *turn;
 
+	//Shared memory keys
+	key_t clockKey;
+	key_t resKey;
+	key_t turnKey;
+	
+	//Shared memory IDs
+	int clockID = 0;
+	int resID = 0;
+	int turnID = 0;
+	int msgID = 0;
+		
+	//random seed
+	srand(time(NULL));
+	
+	//signal handling using signal.h
+	signal(SIGINT, sigHandler);
+	signal(SIGTERM, sigHandler);
+	signal(SIGCHLD, SIG_IGN);
 
 	//Command line switches
-	while ((c = getopt(argc, argv, "hl:i:s:t:m:")) != -1){
+	while ((c = getopt(argc, argv, "hl:v:i:s:t:m:")) != -1){
 		switch(c){
 			case 'h':
 				fprintf(stderr, "Usage: %s -h -l <filename> -s [integer] -t [integer] -c\n\n", argv[0]);
 				fprintf(stderr, "  %s -h\t\t Brings up this help\n", argv[0]);
-				fprintf(stderr, "  %s -l <filename>\tSelects output file to save a log file\n", argv[0]);
+				fprintf(stderr, "  %s -l <filename>\tSelects output file to save a full log file\n", argv[0]);
+				fprintf(stderr, "  %s -v <filename>\tSelects output file to save a verbose log file\n", argv[0]);
 				fprintf(stderr, "  %s -i [long]\tSets the incriment value in nanoseconds\n", argv[0]);
 				fprintf(stderr, "  \t (default increment is random each interval)\n\n");
 				fprintf(stderr, "  %s -s [integer]\tOverwrites the process count\n", argv[0]);
 				fprintf(stderr, "  \t (default process count is %i)\n\n", maxProc);
 				fprintf(stderr, "  %s -t [integer]\tOverwrites the max run time\n", argv[0]);
-				fprintf(stderr, "  \t (default max time is 20 seconds)\n\n");
+				fprintf(stderr, "  \t (default max time is 2 seconds)\n\n");
 				fprintf(stderr, "  %s -m [long]\tOverwrites the max simulated time\n", argv[0]);
-				fprintf(stderr, "  \t (default max time is 30 simulated seconds)\n\n");
+				fprintf(stderr, "  \t (default max time is 60 simulated seconds)\n\n");
 				return 1;
 			
 			case 'l':
@@ -61,7 +133,37 @@ int main (int argc, char *argv[]){
 				fileName[index+1] = '\0';
 				
 				//Flags to output to log file
+				if (verbFlag == 1){
+					perror("Standard Log and Verbose Log cannot both be set\n");
+					return 0;
+				}
 				logFlag = 1;
+				
+				strftime (timeBuff, 100, "%Y-%m-%d %H:%M:%S.000", localtime (&logTime));
+				file = fopen(fileName, "a");
+				fprintf(file, "----  Runtime Start: %s  ----\n", timeBuff);				
+				break;
+			
+			case 'v':
+				//Finds size of argument
+				for (i = 0; optarg[i]!='\0'; i++){
+					index = i;
+				}
+				
+				//Copies filename over to fileName array
+				for (i = 0; i <= index; i++){
+					fileName[i] = optarg[i];
+				}
+				
+				//Ends string
+				fileName[index+1] = '\0';
+				
+				//Flags to output to log file
+				if (logFlag == 1){
+					perror("Standard Log and Verbose Log cannot both be set\n");
+					return 0;
+				}
+				verbFlag = 1;
 				
 				strftime (timeBuff, 100, "%Y-%m-%d %H:%M:%S.000", localtime (&logTime));
 				file = fopen(fileName, "a");
@@ -71,7 +173,6 @@ int main (int argc, char *argv[]){
 			//Sets the incriment value for nanosecond incriment in simulation
 			case 'i':
 				incVal = atol(optarg);
-				incOverride = 1;
 				break;
 			
 			//Sets the number of processes
@@ -95,11 +196,12 @@ int main (int argc, char *argv[]){
 	long timeList[maxProc];
 	long temp = 0;
 	
+	//times processes to start between 1 and 500 milliseconds
 	for (i = 0; i < maxProc; i++){
-		timeList[i] = temp + (rand() % (2000000000 + 1 - 0) + 0);
+		timeList[i] = temp + (rand() % (500000000 + 1 - 1) + 1);
 		temp = timeList[i];
 	}
-	
+	 
 	/*--------------------------------------------------
 	----------------------------------------------------
 	-----------    Shared memory section    ------------
@@ -110,14 +212,23 @@ int main (int argc, char *argv[]){
 	//Key Initialization
 	//--------------------------------------------------
 
-	clockKey = ftok("ftok_clock", 13);
+	clockKey = ftok("ftok_clock", 17);
 	if (clockKey == -1){
 		perror("Clock: Failed to load ftok file");
 		return 1;
 	}
 	
+	resKey = ftok("ftok_res", 19);
+	if (resKey == -1){
+		perror("Resource: Failed to load ftok file");
+		return 1;
+	}
 	
-	
+	turnKey = ftok("ftok_turn", 13);
+	if (turnKey == -1){
+		perror("Turn: Failed to load ftok file");
+		return 1;
+	}
 	
 	
 	//--------------------------------------------------
@@ -138,14 +249,168 @@ int main (int argc, char *argv[]){
 		return 1;
 	}
 
+	//Initializing shared memory for resource
+	resID = shmget(resKey, sizeof(Resource[20]), IPC_CREAT | 0666);
+	if (resID == -1){
+		perror("Resource: Failed to designate shared memory");
+		detachandremove(clockID, clockVar);
+		return 1;
+	}
 	
+	resources = shmat(resID, 0, 0);
+	if (resources == (Resource*)-1){
+		perror("Resource: Failed to attach shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);
+		return 1;
+	}
 	
-	
-	
-	
-	
-	
+	//Initializing shared memory for the turn counter
+	turnID = shmget(turnKey, sizeof(Turn), IPC_CREAT | 0666);
+	if (turnID == -1){
+		perror("Turn: Failed to designate shared memory");
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);
+		return 1;
+	}
 
+	turn = shmat(turnID, NULL, 0);
+	if (turn == (Turn*)-1){
+		detachandremove(clockID, clockVar);
+		detachandremove(resID, resources);		
+		detachandremove(turnID, turn);
+		perror("Turn: Failed to attach shared memory");
+		return 1;
+	}
+	
+	/*--------------------------------------------------
+	----------------------------------------------------
+	---------    End shared memory section    ----------
+	----------------------------------------------------
+	--------------------------------------------------*/
+	
+	//Initialization of shared memory
+	clockVar[0] = 0;
+	clockVar[1] = 0;
+	
+	turn[0].turn = -1;
+	turn[0].turnAck = -1;
+	for (i = 0; i < 20; i++){
+		turn[0].grantedRes[i] = -1;
+	}
+	
+	resAvailable = rand() % (5 + 1 - 3) + 3;
+	int tempRes = resAvailable;
+	
+	for (i = 0; i < 20; i++){
+		resource[i].totalRes = 10;
+		if (tempRes > 0){
+			resource[i].usedRes = 0;
+			for (j = 0; j < 10; j++){
+				resource[i].resArray[j] = -1;
+				resource[i].reqList[j] = -1;
+				tempRes--;
+			}
+		}
+		else{
+			resource[i].usedRes = 10;
+			for (j = 0; j < 10; j++){
+				resource[i].resArray[j] = -2;
+				resource[i].reqList[j] = -2;
+			}
+		}
+	}
+	
+	procCount[0] = 0;
+	userReturn[0].state = -1;
+	
+	fprintf(stderr, "\tR0\tR1\tR2\tR3\tR4\tR5\nAv\t%i\t%i\t%i\t%i\t%i\t%i\n\n",
+		(10-resource[0].usedRes), (10-resource[1].usedRes), (10-resource[2].usedRes), (10-resource[3].usedRes), (10-resource[4].usedRes), (10-resource[5].usedRes));
+	
+	fprintf(stderr, "Available Resources\n\n");
+	for (i = 0; i < resAvailable, i++){
+		fprintf(stderr, "\tR%i", i);
+	}
+	fprintf(stderr, "\nAv");
+	for (i = 0; i < resAvailable; i++){
+		fprintf(stderr, "\t%i", 10-resource[i].usedRes);
+	}
+	fprintf(stderr, "\n\n");
+	
+	
+	//Sets start time for real max time kill condition
+	startTime = time(NULL);
+	
+	while ((time(NULL) - startTime) < maxTime && !killStop && clockTime < maxSimTime){
+		
+		//Code for simulated clock
+		clockTime += incVal;
+			
+		clockVar[0] = clockTime/1000000000;
+		clockVar[1] = clockTime % 1000000000;
+		
+		//Checks against the process create time list to increase addProc
+		//addProc keeps track of how many processes need to be added
+		//This is important in case a process using it's quantum extends
+		//the time past another entry on the list, allowing to start more than one process
+		if (clockTime >= timeList[localTurn]){
+			addProc++;
+			localTurn++;
+		}
+		
+		//While loop to check if the table has room and if there are processes to be added
+		while (!tableFull && addProc > 0){
+			
+			//checks to determine if the process table has open room, function below
+			openProc = checkProcTable(bitProc, 20);
+			
+			if (openProc == -1){
+				if (logFlag){
+					fprintf(file, "OSS: Checked at &ld:&ld and found Process Table full\n", clockVar[0], clockVar[1]);
+				}
+				tableFull = 1;
+			}
+			
+			//Forks child process if there is room in the process table
+			//and if the process count does not exceed the max
+			else if (procCount[0] < maxProc){
+				if ((childPID = fork()) == -1){
+					fprintf(file, "OSS: Failed to fork child process\n");
+					perror("Failed to Fork");
+					_Exit(0);
+				}
+				
+				//Executes the user process
+				if (childPID == 0){
+					procCount[0]++;
+					
+					sprintf(indexStr, "%d", openProc);
+					sprintf(resStr, "%d", resAvailable);
+					
+					if (execlp("user", indexStr, resStr, NULL) == -1){
+						perror("Failed to exec");
+						if (logFlag){
+							fprintf(file, "OSS: Failed to execute user process\n");
+						}
+						_Exit(1);
+					}
+					if (logFlag){
+						fprintf(file, "OSS: User process %i started at %ld:%09ld in HIGH queue\n", clockVar[0], clockVar[1]);
+					}
+					_Exit(1);
+					
+				}
+				
+				//Sets a flag in the bitProc for this entry being used
+				bitProc[openProc] = 1;
+
+				//Reduces addProc which keeps track of how many processes should be added
+				addProc--;				
+			}
+			
+			
+			
+		}
 }
 
 
@@ -165,6 +430,19 @@ int detachandremove(int id, void *shmaddr){
 		return 0;
 	}
 	errno = error;
+	return -1;
+}
+
+//Function to check if process table has room and return index
+int checkProcTable(int *bitProc, int size){
+	int i = 0;
+	
+	for (i = 0; i < size; i++){
+		if (bitProc[i] == 0){
+			bitProc[i] = 1;
+			return i;
+		}
+	}
 	return -1;
 }
 
