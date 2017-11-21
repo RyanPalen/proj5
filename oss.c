@@ -15,6 +15,7 @@
 //Function prototypes defined below
 int detachandremove(int id, void *shmaddr);
 int checkProcTable(int *bitProc, int size);
+int countProc(int *procList, int size);
 void sigHandler(int sig);
 long convertTime(long sec, long nano);
 
@@ -23,8 +24,9 @@ int killStop;
 
 typedef struct{
 	int totalRes;
+	int totalReq;
 	int usedRes;
-	int resArray[20]; //-2 in this means system has resource
+	int resArray[20]; //-1 in this means system has resource
 	int reqList[20];
 }Resource;
 
@@ -78,9 +80,9 @@ int main (int argc, char *argv[]){
 	char fileName[30];
 	int logFlag = 0;
 	int verbFlag = 0;
-	int maxTime = 2;
-	int maxProc = 30;
-	long incVal = 100;
+	int maxTime = 20;
+	int maxProc = 15;
+	long incVal = 75;
 	long maxSimTime = 60000000000;
 	
 	//Shared memory variables
@@ -103,7 +105,7 @@ int main (int argc, char *argv[]){
 	int turnID = 0;
 	int countID = 0;
 	int pidID = 0;
-		
+	
 	//random seed
 	srand(time(NULL));
 	
@@ -211,7 +213,7 @@ int main (int argc, char *argv[]){
 	
 	//times processes to start between 1 and 500 milliseconds
 	for (i = 0; i < maxProc; i++){
-		timeList[i] = temp + (rand() % (500000000 + 1 - 1) + 1);
+		timeList[i] = temp + (rand() % (250 + 1 - 1) + 1);
 		temp = timeList[i];
 	}
 	 
@@ -375,15 +377,16 @@ int main (int argc, char *argv[]){
 		if (tempRes > 0){
 			resources[i].usedRes = 0;
 			for (j = 0; j < 20; j++){
-				resources[i].resArray[j] = -1;
+				resources[i].resArray[j] = 0;
 				resources[i].reqList[j] = 0;
 			}
 			tempRes--;
 		}
 		else{
 			resources[i].usedRes = 10;
+			resources[i].totalReq = -1;
 			for (j = 0; j < 20; j++){
-				resources[i].resArray[j] = -2;
+				resources[i].resArray[j] = -1;
 				resources[i].reqList[j] = 0;
 			}
 		}
@@ -401,10 +404,19 @@ int main (int argc, char *argv[]){
 	}
 	fprintf(stderr, "\n\n");
 	
+	//Variables for Deadlock Detection
+	int procMatrix[20][resAvailable];
+	int reqMatrix[resAvailable][20];
+	int deniedRes = 0;
+
+	
 	
 	//Sets start time for real max time kill condition
 	startTime = time(NULL);
-	long printTime = 1000000
+	long printTime = 300;
+	
+	
+	file = fopen("log", "w");
 	
 	while ((time(NULL) - startTime) < maxTime && !killStop && clockTime < maxSimTime){
 		
@@ -414,17 +426,43 @@ int main (int argc, char *argv[]){
 		clockVar[0] = clockTime/1000000000;
 		clockVar[1] = clockTime % 1000000000;
 		
+		//usleep(5);
+		
 		if (clockTime > printTime){
 			
-			fprintf(stderr, "Available Resources\n\n");
-				for (i = 0; i < resAvailable; i++){
-					fprintf(stderr, "\tR%i", i);
+			sem_wait(sem);
+			fprintf(file, "Requested Resources\n\n");
+			for (i = 0; i < resAvailable; i++){
+				fprintf(file, "\tR%i", i);
+			}
+			fprintf(file, "\n");
+			for (i = 0; i < 20; i++){
+				
+				//if (pidList[i] > 0){
+				fprintf(file, "P%i", i);
+				for (j = 0; j < resAvailable; j++){
+					fprintf(file, "\t%i", resources[j].reqList[i]);
 				}
-				fprintf(stderr, "\nAv");
-				for (i = 0; i < resAvailable; i++){
-					fprintf(stderr, "\t%i", 10-resources[i].usedRes);
+				fprintf(file, "\t%i\n", pidList[i]);
+				//}
+			}
+			fprintf(file, "\n\n");
+			
+			fprintf(file, "Granted Resources\n\n");
+			
+			for (i = 0; i < resAvailable; i++){
+				fprintf(file, "\t R%i", i);
+			}
+			fprintf(file, "\n");
+			for (i = 0; i < 20; i++){
+				fprintf(file, "P%i", i);
+				for (j = 0; j < resAvailable; j++){
+					fprintf(file, "\t%i", resources[j].resArray[i]);
 				}
-				fprintf(stderr, "\n\n");
+				fprintf(file, "\t%i\n", pidList[i]);
+			}
+			
+			sem_post(sem);
 			
 			printTime += clockTime;
 		}
@@ -488,20 +526,101 @@ int main (int argc, char *argv[]){
 				addProc--;				
 			}
 			
+			for (i = 0; i < resAvailable; i++){
+				if (resources[i].totalReq > 0 && resources[i].usedRes < 10){
+					for (j = 0; j < 20; j++){
+						if (resources[i].reqList[j] > 0){
+							turn[0].grantedRes[j] = i;
+							turn[0].turn = j;
+							turn[0].turnAck = -1;
+							fprintf(file, "Granting R%i to P%i\n", i, j);
+							
+							//Printing Info
+							/*
+							fprintf(file, "Requested Resources\n\n");
+							for (i = 0; i < resAvailable; i++){
+								fprintf(file, "\tR%i", i);
+							}
+							fprintf(file, "\n");
+							for (i = 0; i < 20; i++){
+								
+								//if (pidList[i] > 0){
+								fprintf(file, "P%i", i);
+								for (j = 0; j < resAvailable; j++){
+									fprintf(file, "\t%i", resources[j].reqList[i]);
+								}
+								fprintf(file, "\t%i\n", pidList[i]);
+								//}
+							}
+							fprintf(file, "\n\n");
+							
+							fprintf(file, "Granted Resources\n\n");
+							
+							for (i = 0; i < resAvailable; i++){
+								fprintf(file, "\t R%i", i);
+							}
+							fprintf(file, "\n");
+							for (i = 0; i < 20; i++){
+								fprintf(file, "P%i", i);
+								for (j = 0; j < resAvailable; j++){
+									fprintf(file, "\t%i", resources[j].resArray[i]);
+								}
+								fprintf(file, "\t%i\n", pidList[i]);
+							}
+							
+							*/
+							int loop = 0;
+							//Ending printing of info
+							int whileCount = 0;
+							while (turn[0].turn != -1 && !killStop){
+								loop++;
+								while (turn[0].turnAck > -1 && !killStop){
+									whileCount++;
+									if (whileCount > 10000000){
+										turn[0].turnAck = -1;
+										turn[0].turn = -1;
+									}
+									if (loop == 10000){
+										printf("Stuck in Turn Ack - inner - %i and %i\n", turn[0].turnAck, turn[0].turn);
+									}
+								}
+								
+								if (loop == 10000){
+									printf("Stuck in Turn Ack - outer - %i and %i\n", turn[0].turnAck, turn[0].turn);
+									
+								}
+								if (turn[0].turnAck == -1 || loop == 1000000){
+									turn[0].turn == -1;
+									loop = 0;
+								}
+							}
+							whileCount = 0;
+						}
+						else if (resources[i].reqList[j] > 0 && resources[i].reqList[j] >= (10 - resources[i].usedRes)){
+							deniedRes++;
+						}
+					}
+				}
+			}
 			
+			if (deniedRes > 10){
+				
+			}
 			
 		}
 	}
 	
+	fclose(file);
+	
 	//Closes processes with SIGTERM using shared memory to keep track of PIDs
 	for (i = 0; i < 20; i++){
-		if (pidList[i] > 0){
+		if (pidList[i] > 1){
 			
 			if (logFlag){
 				fprintf(file, "OSS - Cleanup: Closing Process %ld\n", pidList[i]);
 			}
 			
-			fprintf(stderr, "Closing Process: %ld\n", pidList[i]);
+			fprintf(stderr, "%i: Closing Process: %ld\n", i, pidList[i]);
 			
 			//SIGTERM kill of process to allow cleanup
 			kill(pidList[i], SIGTERM);
@@ -523,7 +642,7 @@ int main (int argc, char *argv[]){
 				//Waiting for process to finish with 2 second sleep
 				else if(killStatus == 0){
 					
-					fprintf(stderr, "Waiting for Process %ld to end...\n", pidList[i]);
+					fprintf(stderr, "P%i: Waiting for Process %ld to end...\n", i, pidList[i]);
 					
 					sleep(1);
 				}
@@ -595,6 +714,20 @@ int checkProcTable(int *bitProc, int size){
 		}
 	}
 	return -1;
+}
+
+//Count number of currently running processes
+int countProc(int *procList, int size){
+	int i = 0;
+	int procRun = 0;
+	
+	for (i = 0; i < size; i++){
+		if (procList[i] > 0){
+			procRun++;
+		}
+	}
+	
+	return procRun;
 }
 
 //Basic signal handler to check for Ctrl+C and SIGTERM sent to child processes

@@ -11,8 +11,8 @@
 #include <fcntl.h>
 #include <pthread.h>
 
-#define BOUND 250000
-#define TERM 250000
+#define BOUND 300
+#define TERM 10000
 
 
 //Function prototypes, defined below
@@ -24,6 +24,7 @@ int killStop;
 
 typedef struct{
 	int totalRes;
+	int totalReq;
 	int usedRes;
 	int resArray[20]; //-1 in this means system has resource
 	int reqList[20];
@@ -85,6 +86,8 @@ int main (int argc, char *argv[]){
 	int resReturn = -1;
 	int resRequest = -1;
 	int resCount = 0;
+	int reqCount = 0;
+	int returnFlag = 0;
 	
 	for (i = 0; i < resAvailable; i++){
 		resOwned[i] = 0;
@@ -194,6 +197,7 @@ int main (int argc, char *argv[]){
 	
 	//Initializing shared memory for the process count array
 	pidID = shmget(pidKey, sizeof(int[20]), 0666);
+	
 	if (countID == -1){
 		perror("PID: Failed to designate shared memory");
 		return 1;
@@ -220,7 +224,7 @@ int main (int argc, char *argv[]){
 		temp = termList[i];
 	}
 	
-	long temp = startTime;
+	temp = startTime;
 	
 	for (i = 0; i < 50; i++){
 		timeList[i] = temp + (rand() % (BOUND + 1 - 1) + 1);
@@ -234,53 +238,96 @@ int main (int argc, char *argv[]){
 	
 	while(!killStop && !done){
 		
-		if (timeList[timeCount] < convertTime(clockVar[0], clockVar[1])){
-			if ((rand() % (3 + 1 - 0) + 0) == 0 && resCount > 0){
-				while (resReturn == -1 || resOwned[resReturn] < 1){
-					resReturn = rand() % (resAvailable + 1 - 0) + 0;
+		
+		if (turn[0].turn == localPID){
+			sem_wait(sem);
+			turn[0].turnAck = localPID;
+			if (turn[0].turnAck == localPID){
+				
+				fprintf(stderr, "P%i: R%i shows %i used, %i requested\n", localPID, turn[0].grantedRes[localPID], resources[turn[0].grantedRes[localPID]].usedRes,resources[turn[0].grantedRes[localPID]].reqList[localPID]);
+				if (resources[turn[0].grantedRes[localPID]].usedRes < 10 && resources[turn[0].grantedRes[localPID]].reqList[localPID] > 0){
+					resources[turn[0].grantedRes[localPID]].resArray[localPID]++;
+					resources[turn[0].grantedRes[localPID]].reqList[localPID]--;
+					resources[turn[0].grantedRes[localPID]].usedRes++;
+					resources[turn[0].grantedRes[localPID]].totalReq--;
+					turn[0].turn = -1;
+					turn[0].turnAck = -1;
 				}
-				sem_wait(sem);
-				resources[resReturn].resArray[localPID]--;
-				resources[i].usedRes--;
-				resCount--;
-				sem_post(sem);
+				else{
+					fprintf(stderr, "%i Cannot request Resource - None Available\n", getpid());
+					turn[0].turn = -1;
+					turn[0].turnAck = -1;
+				}
+				
+			}
+			sem_post(sem);
+		}
+		
+		
+		if (timeList[timeCount] < convertTime(clockVar[0], clockVar[1])){
+			
+			if ((rand() % (15 + 1 - 0) + 0) == 0 && (resCount > 0 || reqCount > 0)){
+				
+				while (!returnFlag && !killStop){
+					
+					resReturn = rand() % ((resAvailable - 1) + 1 - 0) + 0;
+					//fprintf(stderr, "P%i is considering returning %i, requested: %i\n", localPID, resReturn, resources[resReturn].reqList[localPID]);
+					if (resOwned[resReturn] > 0 || resources[resReturn].reqList[localPID] > 0){
+						returnFlag = 1;
+					}
+				}
+				
+				returnFlag = 0;
+				
+				fprintf(stderr, "P%i is returning R%i from ", localPID, resReturn);
+				//sem_wait(sem);
+				
+				if (resources[resReturn].reqList[localPID] > 0){
+					fprintf(stderr, "request list\n");
+					resources[resReturn].reqList[localPID]--;
+					reqCount--;
+				}
+				else if (resources[resReturn].resArray[localPID] > 0){
+					fprintf(stderr, "owned\n");
+					resources[resReturn].resArray[localPID]--;
+					resources[i].usedRes--;
+					resCount--;
+				}
+					
+				//sem_post(sem);
 			}
 			else{
-				resRequest = rand() % (resAvailable + 1 - 0) + 0;
-				sem_wait(sem);
+				resRequest = rand() % ((resAvailable - 1) + 1 - 0) + 0;
+				
+				//sem_wait(sem);
+				
 				resources[resRequest].reqList[localPID]++;
-				resCount++;
-				sem_post(sem);
+				resources[resRequest].totalReq++;
+				
+				reqCount++;
+				//sem_post(sem);
 			}
 			timeCount++;
 		}
-		
-		if (turn.turn == localPID){
-			turn.turnAck = localPID;
-			if (turn.turnAck == localPID){
-				sem_wait(sem);
-				if (resources[turn.grantedRes[localPID]].usedRes < 10){
-					resources[turn.grantedRes[localPID]].resArray[localPID]++;
-					
-				}
-				sem_post(sem);
-			}
-		}
-		
-		if (termList[termCount] < convertTime(clockVar[0], clockVar[1])){
-			if ((rand() % (10 + 1 - 0) + 0) == 0){
-				done = 1;
 				
-				sem_wait(sem);
+		if (termList[termCount] < convertTime(clockVar[0], clockVar[1]) || killStop){
+			if ((rand() % (15 + 1 - 0) + 0) == 0){
+				done = 1;
+				fprintf(stderr, "%i Is Closing - Returning Resources\n", getpid());
+				//sem_wait(sem);
 				for (i = 0; i < resAvailable; i++){
 					resources[i].resArray[localPID] -= resOwned[i];
-					resources[i].usedRes - = resOwned[i];
+					resources[i].usedRes -= resOwned[i];
 					resources[i].reqList[localPID] = 0;
 					resCount = 0;
 				}
-				sem_post(sem);
+				
+				//procCount[0]--;
+				pidList[localPID] = 0;
+				//sem_post(sem);
 			}
 			termCount++;
+			return 0;
 		}
 		
 	}
@@ -290,8 +337,7 @@ int main (int argc, char *argv[]){
 	
 	
 	//Cleanup
-	procCount[0]--;
-	pidList[localPID] = -1;
+	
 	return 0;
 
 
