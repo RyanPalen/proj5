@@ -33,7 +33,8 @@ typedef struct{
 typedef struct{
 	int turn;
 	int turnAck;
-	int grantedRes[20];
+	enum state {idle, want_in, in_cs, done, dne} flag[20];
+	int grantList[20][20];
 }Turn;
 
 sem_t *sem;
@@ -47,8 +48,7 @@ int main (int argc, char *argv[]){
 	
 	//Semaphore
 	sem = sem_open("/mysemaphore", 0);
-	
-	
+	//enum state {idle, want_in, in_cs, done, dne} *flag;
 
 	//Shared memory variables
 	long *clockVar;
@@ -63,6 +63,7 @@ int main (int argc, char *argv[]){
 	key_t turnKey;
 	key_t countKey;
 	key_t pidKey;
+	//key_t stateKey;
 	
 	//Shared memory IDs
 	int clockID = 0;
@@ -70,6 +71,7 @@ int main (int argc, char *argv[]){
 	int turnID = 0;
 	int countID = 0;
 	int pidID = 0;
+	//int stateID = 0;
 	
 	//random seed
 	srand(time(NULL) + getpid());
@@ -88,6 +90,7 @@ int main (int argc, char *argv[]){
 	int resCount = 0;
 	int reqCount = 0;
 	int returnFlag = 0;
+	int maxProc = 20;
 	
 	for (i = 0; i < resAvailable; i++){
 		resOwned[i] = 0;
@@ -138,6 +141,14 @@ int main (int argc, char *argv[]){
 		perror("PID: Failed to load ftok file");
 		return 1;
 	}
+	
+	/*
+	stateKey = ftok("ftok_state", 15);
+	if (key == -1){
+		perror("Failed to load ftok file");
+		return 1;
+	}
+	*/
 	
 	//--------------------------------------------------
 	//Shared Memory Initialization
@@ -208,6 +219,21 @@ int main (int argc, char *argv[]){
 		perror("PID: Failed to attach shared memory");
 		return 1;
 	}
+	
+	/*
+	//shared memory get and attach for state
+	stateID = shmget(stateKey, sizeof(enum state[maxProc]), 0666);
+	if (stateID == -1){
+		perror("State: Failed to designate shared memory");
+		return 1;
+	}
+
+	state = shmat(stateID, NULL, 0);
+	if (flag == -1){
+		perror("State: Failed to attach shared memory");
+		return 1;
+	}
+	*/
 
 	/*--------------------------------------------------
 	----------------------------------------------------
@@ -236,11 +262,18 @@ int main (int argc, char *argv[]){
 	int timeCount = 0;
 	int termCount = 0;
 	
+	
+	/*------------------------------------------
+	--------------------------------------------
+	-----------Removed for rebuild--------------
+	--------------------------------------------
+	--------------------------------------------
+	
 	while(!killStop && !done){
 		
 		
 		if (turn[0].turn == localPID){
-			sem_wait(sem);
+			
 			turn[0].turnAck = localPID;
 			if (turn[0].turnAck == localPID){
 				
@@ -260,19 +293,19 @@ int main (int argc, char *argv[]){
 				}
 				
 			}
-			sem_post(sem);
+			
 		}
 		
 		
 		if (timeList[timeCount] < convertTime(clockVar[0], clockVar[1])){
 			
-			if ((rand() % (15 + 1 - 0) + 0) == 0 && (resCount > 0 || reqCount > 0)){
+			if ((rand() % (10 + 1 - 0) + 0) == 0 && (resCount > 0)){
 				
 				while (!returnFlag && !killStop){
 					
 					resReturn = rand() % ((resAvailable - 1) + 1 - 0) + 0;
 					//fprintf(stderr, "P%i is considering returning %i, requested: %i\n", localPID, resReturn, resources[resReturn].reqList[localPID]);
-					if (resOwned[resReturn] > 0 || resources[resReturn].reqList[localPID] > 0){
+					if (resOwned[resReturn] > 0){
 						returnFlag = 1;
 					}
 				}
@@ -280,21 +313,14 @@ int main (int argc, char *argv[]){
 				returnFlag = 0;
 				
 				fprintf(stderr, "P%i is returning R%i from ", localPID, resReturn);
-				//sem_wait(sem);
-				
-				if (resources[resReturn].reqList[localPID] > 0){
-					fprintf(stderr, "request list\n");
-					resources[resReturn].reqList[localPID]--;
-					reqCount--;
-				}
-				else if (resources[resReturn].resArray[localPID] > 0){
+
+				if (resources[resReturn].resArray[localPID] > 0){
 					fprintf(stderr, "owned\n");
 					resources[resReturn].resArray[localPID]--;
 					resources[i].usedRes--;
 					resCount--;
 				}
 					
-				//sem_post(sem);
 			}
 			else{
 				resRequest = rand() % ((resAvailable - 1) + 1 - 0) + 0;
@@ -322,7 +348,7 @@ int main (int argc, char *argv[]){
 					resCount = 0;
 				}
 				
-				//procCount[0]--;
+				procCount[0]--;
 				pidList[localPID] = 0;
 				//sem_post(sem);
 			}
@@ -330,14 +356,147 @@ int main (int argc, char *argv[]){
 			return 0;
 		}
 		
-	}
-	
-	
-	
-	
+		--------------------------------------------
+		--------------------------------------------
+		-----------Removed for rebuild--------------
+		--------------------------------------------
+		------------------------------------------*/
+		
+		while(!killStop && !done){
+			
+			//-----------------------------------------------------
+			//Mutual exclusion section
+			//-----------------------------------------------------	
+			do {	
+				do {
+					//adapted code from notes for multi process solution
+					turn[0].flag[localPID] = want_in; //Raise flag
+					
+					//setting local variable
+					j = turn[0].turn;
+					
+					//wait till turn
+					while (j != localPID && !killStop){
+						
+						if (timeList[timeCount] < convertTime(clockVar[0], clockVar[1])){
+			
+							if ((rand() % (10 + 1 - 0) + 0) == 0 && (resCount > 0)){
+								
+								while (!returnFlag && !killStop){
+									
+									resReturn = rand() % ((resAvailable - 1) + 1 - 0) + 0;
+									if (resOwned[resReturn] > 0){
+										returnFlag = 1;
+									}
+								}
+								
+								returnFlag = 0;
+								
+								fprintf(stderr, "P%i is returning R%i from ", localPID, resReturn);
+
+								if (resources[resReturn].resArray[localPID] > 0){
+									fprintf(stderr, "owned\n");
+									resources[resReturn].resArray[localPID]--;
+									resources[i].usedRes--;
+									resCount--;
+								}
+									
+							}
+							else{
+								resRequest = rand() % ((resAvailable - 1) + 1 - 0) + 0;
+								
+								resources[resRequest].reqList[localPID]++;
+								resources[resRequest].totalReq++;
+								
+								reqCount++;
+							}
+							timeCount++;
+						}
+						
+						if (turn[0].flag[j] != idle){
+							j = turn[0].turn;
+						}
+						else{
+							j = (j + 1) % maxProc;
+						}				
+					}
+					
+					//declare intention to enter critical section
+					sem_wait(sem);
+					turn[0].flag[localPID] = in_cs;
+					sem_post(sem);
+					
+					//Check that no one else is in crit section
+					for (j = 0; j < maxProc; j++){
+						if ((j != localPID) && (turn[0].flag[j] == in_cs)){
+							
+							break;
+						}
+					}
+					
+				} while (((j < maxProc) || (turn[0].turn != localPID && (turn[0].flag[turn[0].turn] != idle || turn[0].flag[turn[0].turn] != done))) && !killStop);
+				
+				//Assign turn to self and enter critical section
+				turn[0].turn = localPID;
+				
+				//code below used for visual reference of what process is in critical section
+				//fprintf(stderr, "%i is currently in critical section\n", localPID);
+				
+				fprintf(stderr, "Process currently in Critical Section: %i\n", localPID);
+
+				//--------------------------------------------------
+				//-----------------Critical Section-----------------
+				//--------------------------------------------------
+				
+				for (i = 0; i < resAvailable; i++){
+					if (resources[i].totalRes - turn[0].grantList[i][localPID] < 0){
+						turn[0].grantList[i][localPID] = resources[i].totalRes;
+					}
+					
+					resOwned[i] += turn[0].grantList[i][localPID];
+					resources[i].reqList[localPID] -= turn[0].grantList[i][localPID];
+					resources[i].totalRes -= turn[0].grantList[i][localPID];
+					resources[i].resArray[localPID] += turn[0].grantList[i][localPID];
+					resources[i].usedRes += turn[0].grantList[i][localPID];
+					turn[0].grantList[i][localPID] = 0;
+				}
+				
+
+				//--------------------------------------------------
+				//---------------End Critical Section---------------
+				//--------------------------------------------------
+				
+				//Assign turn to -1 for oss process
+				turn[0].turn = -1;
+				
+				//Kills the process if it runs 5 times and sets the flag so other
+				//processes can tell it's finished
+				if (termList[termCount] < convertTime(clockVar[0], clockVar[1]) || killStop){
+					if ((rand() % (15 + 1 - 0) + 0) == 0){
+						done = 1;
+						fprintf(stderr, "%i Is Closing - Returning Resources\n", getpid());
+						
+						for (i = 0; i < resAvailable; i++){
+							resources[i].resArray[localPID] -= resOwned[i];
+							resources[i].usedRes -= resOwned[i];
+							turn[0].grantList[i][localPID] = 0;
+							resCount = 0;
+						}
+						turn[0].flag[localPID] = done;
+						pidList[localPID] = 0;
+					}
+					else{
+						turn[0].flag[localPID] = idle;
+					}
+				}
+				
+			} while (!killStop && !done);
+		}	
 	
 	//Cleanup
-	
+	procCount[0]-= -1;
+	pidList[localPID] = 0;
+				
 	return 0;
 
 
