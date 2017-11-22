@@ -32,7 +32,6 @@ typedef struct{
 
 typedef struct{
 	int turn;
-	int turnAck;
 	enum state {idle, want_in, in_cs, done, dne} flag[20];
 	int grantList[20][20];
 }Turn;
@@ -48,7 +47,6 @@ int main (int argc, char *argv[]){
 	
 	//Semaphore
 	sem = sem_open("/mysemaphore", 0);
-	//enum state {idle, want_in, in_cs, done, dne} *flag;
 
 	//Shared memory variables
 	long *clockVar;
@@ -63,7 +61,6 @@ int main (int argc, char *argv[]){
 	key_t turnKey;
 	key_t countKey;
 	key_t pidKey;
-	//key_t stateKey;
 	
 	//Shared memory IDs
 	int clockID = 0;
@@ -71,7 +68,6 @@ int main (int argc, char *argv[]){
 	int turnID = 0;
 	int countID = 0;
 	int pidID = 0;
-	//int stateID = 0;
 	
 	//random seed
 	srand(time(NULL) + getpid());
@@ -79,6 +75,8 @@ int main (int argc, char *argv[]){
 	//Arguments from exec
 	int localPID = atoi(argv[0]);
 	int resAvailable = atoi(argv[1]);
+	int maxProc = atoi(argv[2]);
+
 	
 	//Misc variables
 	int resOwned[resAvailable];
@@ -90,7 +88,6 @@ int main (int argc, char *argv[]){
 	int resCount = 0;
 	int reqCount = 0;
 	int returnFlag = 0;
-	int maxProc = 20;
 	
 	for (i = 0; i < resAvailable; i++){
 		resOwned[i] = 0;
@@ -141,14 +138,6 @@ int main (int argc, char *argv[]){
 		perror("PID: Failed to load ftok file");
 		return 1;
 	}
-	
-	/*
-	stateKey = ftok("ftok_state", 15);
-	if (key == -1){
-		perror("Failed to load ftok file");
-		return 1;
-	}
-	*/
 	
 	//--------------------------------------------------
 	//Shared Memory Initialization
@@ -219,21 +208,6 @@ int main (int argc, char *argv[]){
 		perror("PID: Failed to attach shared memory");
 		return 1;
 	}
-	
-	/*
-	//shared memory get and attach for state
-	stateID = shmget(stateKey, sizeof(enum state[maxProc]), 0666);
-	if (stateID == -1){
-		perror("State: Failed to designate shared memory");
-		return 1;
-	}
-
-	state = shmat(stateID, NULL, 0);
-	if (flag == -1){
-		perror("State: Failed to attach shared memory");
-		return 1;
-	}
-	*/
 
 	/*--------------------------------------------------
 	----------------------------------------------------
@@ -469,7 +443,7 @@ int main (int argc, char *argv[]){
 				//Assign turn to -1 for oss process
 				turn[0].turn = -1;
 				
-				//Kills the process if it runs 5 times and sets the flag so other
+				//Kills the process if it decides to and sets the flag so other
 				//processes can tell it's finished
 				if (termList[termCount] < convertTime(clockVar[0], clockVar[1]) || killStop){
 					if ((rand() % (15 + 1 - 0) + 0) == 0){

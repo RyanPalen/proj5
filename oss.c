@@ -32,8 +32,8 @@ typedef struct{
 
 typedef struct{
 	int turn;
-	int turnAck;
-	int grantedRes[20];
+	enum state {idle, want_in, in_cs, done, dne} flag[20];
+	int grantList[20][20];
 }Turn;
 
 //Global semaphore variable
@@ -44,6 +44,7 @@ int main (int argc, char *argv[]){
 	//Iterators and counters
 	int index = 0, i = 0, j = 0;
 	char c;
+	int lineCount = 0;
 	time_t startTime;
 	long clockTime = 0;
 	int addProc = 0;
@@ -71,6 +72,7 @@ int main (int argc, char *argv[]){
 	char indexStr[5];
 	char resStr[5];
 	char timeStr[15];
+	char procStr[5];
 	char timeBuff[100];
 	time_t logTime = time(NULL);
 	int openProc = 0;
@@ -81,9 +83,10 @@ int main (int argc, char *argv[]){
 	int logFlag = 0;
 	int verbFlag = 0;
 	int maxTime = 20;
-	int maxProc = 15;
-	long incVal = 75;
+	int maxProc = 20;
+	long incVal = 25;
 	long maxSimTime = 60000000000;
+	int verbose = 0;
 	
 	//Shared memory variables
 	long *clockVar;
@@ -120,8 +123,7 @@ int main (int argc, char *argv[]){
 			case 'h':
 				fprintf(stderr, "Usage: %s -h -l <filename> -s [integer] -t [integer] -c\n\n", argv[0]);
 				fprintf(stderr, "  %s -h\t\t Brings up this help\n", argv[0]);
-				fprintf(stderr, "  %s -l <filename>\tSelects output file to save a full log file\n", argv[0]);
-				fprintf(stderr, "  %s -v <filename>\tSelects output file to save a verbose log file\n", argv[0]);
+				fprintf(stderr, "  %s -v \tSelects verbose logging\n", argv[0]);
 				fprintf(stderr, "  %s -i [long]\tSets the incriment value in nanoseconds\n", argv[0]);
 				fprintf(stderr, "  \t (default increment is random each interval)\n\n");
 				fprintf(stderr, "  %s -s [integer]\tOverwrites the process count\n", argv[0]);
@@ -132,57 +134,8 @@ int main (int argc, char *argv[]){
 				fprintf(stderr, "  \t (default max time is 60 simulated seconds)\n\n");
 				return 1;
 			
-			case 'l':
-				
-				//Finds size of argument
-				for (i = 0; optarg[i]!='\0'; i++){
-					index = i;
-				}
-				
-				//Copies filename over to fileName array
-				for (i = 0; i <= index; i++){
-					fileName[i] = optarg[i];
-				}
-				
-				//Ends string
-				fileName[index+1] = '\0';
-				
-				//Flags to output to log file
-				if (verbFlag == 1){
-					perror("Standard Log and Verbose Log cannot both be set\n");
-					return 0;
-				}
-				logFlag = 1;
-				
-				strftime (timeBuff, 100, "%Y-%m-%d %H:%M:%S.000", localtime (&logTime));
-				file = fopen(fileName, "a");
-				fprintf(file, "----  Runtime Start: %s  ----\n", timeBuff);				
-				break;
-			
 			case 'v':
-				//Finds size of argument
-				for (i = 0; optarg[i]!='\0'; i++){
-					index = i;
-				}
-				
-				//Copies filename over to fileName array
-				for (i = 0; i <= index; i++){
-					fileName[i] = optarg[i];
-				}
-				
-				//Ends string
-				fileName[index+1] = '\0';
-				
-				//Flags to output to log file
-				if (logFlag == 1){
-					perror("Standard Log and Verbose Log cannot both be set\n");
-					return 0;
-				}
-				verbFlag = 1;
-				
-				strftime (timeBuff, 100, "%Y-%m-%d %H:%M:%S.000", localtime (&logTime));
-				file = fopen(fileName, "a");
-				fprintf(file, "----  Runtime Start: %s  ----\n", timeBuff);				
+				verbose = 1;				
 				break;
 			
 			//Sets the incriment value for nanosecond incriment in simulation
@@ -364,7 +317,7 @@ int main (int argc, char *argv[]){
 	turn[0].turn = -1;
 	turn[0].turnAck = -1;
 	for (i = 0; i < 20; i++){
-		turn[0].grantedRes[i] = -1;
+		turn[0].grantList[i] = -1;
 	}
 	
 	resAvailable = rand() % (5 + 1 - 3) + 3;
@@ -413,6 +366,7 @@ int main (int argc, char *argv[]){
 	
 	//Sets start time for real max time kill condition
 	startTime = time(NULL);
+	
 	long printTime = 300;
 	
 	
@@ -428,43 +382,51 @@ int main (int argc, char *argv[]){
 		
 		//usleep(5);
 		
-		if (clockTime > printTime){
-			
-			sem_wait(sem);
-			fprintf(file, "Requested Resources\n\n");
-			for (i = 0; i < resAvailable; i++){
-				fprintf(file, "\tR%i", i);
-			}
-			fprintf(file, "\n");
-			for (i = 0; i < 20; i++){
+		//Prints in the log
+		if (verbose){
+			if (clockTime > printTime && lineCount < 1500){
 				
-				//if (pidList[i] > 0){
-				fprintf(file, "P%i", i);
-				for (j = 0; j < resAvailable; j++){
-					fprintf(file, "\t%i", resources[j].reqList[i]);
+				fprintf(file, "Requested Resources\n\n");
+				for (i = 0; i < resAvailable; i++){
+					fprintf(file, "\tR%i", i);
 				}
-				fprintf(file, "\t%i\n", pidList[i]);
-				//}
-			}
-			fprintf(file, "\n\n");
-			
-			fprintf(file, "Granted Resources\n\n");
-			
-			for (i = 0; i < resAvailable; i++){
-				fprintf(file, "\t R%i", i);
-			}
-			fprintf(file, "\n");
-			for (i = 0; i < 20; i++){
-				fprintf(file, "P%i", i);
-				for (j = 0; j < resAvailable; j++){
-					fprintf(file, "\t%i", resources[j].resArray[i]);
+				fprintf(file, "\n");
+				lineCount++;
+				for (i = 0; i < 20; i++){
+					
+					//if (pidList[i] > 0){
+					fprintf(file, "P%i", i);
+					for (j = 0; j < resAvailable; j++){
+						fprintf(file, "\t%i", resources[j].reqList[i]);
+					}
+					fprintf(file, "\t%i\n", pidList[i]);
+					lineCount++;
+					//}
 				}
-				fprintf(file, "\t%i\n", pidList[i]);
+				fprintf(file, "\n\n");
+				lineCount++;
+				lineCount++;
+				
+				fprintf(file, "Granted Resources\n\n");
+				lineCount++;
+				lineCount++;
+				
+				for (i = 0; i < resAvailable; i++){
+					fprintf(file, "\t R%i", i);
+				}
+				fprintf(file, "\n");
+				lineCount++;
+				
+				for (i = 0; i < 20; i++){
+					fprintf(file, "P%i", i);
+					for (j = 0; j < resAvailable; j++){
+						fprintf(file, "\t%i", resources[j].resArray[i]);
+					}
+					fprintf(file, "\t%i\n", pidList[i]);
+					lineCount++;
+				}
+				printTime += clockTime;
 			}
-			
-			sem_post(sem);
-			
-			printTime += clockTime;
 		}
 		
 		//Checks against the process create time list to increase addProc
@@ -483,9 +445,8 @@ int main (int argc, char *argv[]){
 			openProc = checkProcTable(bitProc, 20);
 			
 			if (openProc == -1){
-				if (logFlag){
-					fprintf(file, "OSS: Checked at &ld:&ld and found Process Table full\n", clockVar[0], clockVar[1]);
-				}
+				fprintf(file, "OSS: Checked at &ld:&ld and found Process Table full\n", clockVar[0], clockVar[1]);
+				lineCount++;
 				tableFull = 1;
 			}
 			
@@ -504,19 +465,17 @@ int main (int argc, char *argv[]){
 					
 					sprintf(indexStr, "%d", openProc);
 					sprintf(resStr, "%d", resAvailable);
+					sprintf(procStr, "%d", maxProc);
 					
-					if (execlp("user", indexStr, resStr, NULL) == -1){
+					if (execlp("user", indexStr, resStr, procStr, NULL) == -1){
 						perror("Failed to exec");
-						if (logFlag){
-							fprintf(file, "OSS: Failed to execute user process\n");
-						}
+						fprintf(file, "OSS: Failed to execute user process\n");
+						
 						_Exit(1);
 					}
-					if (logFlag){
-						fprintf(file, "OSS: User process %i started at %ld:%09ld in HIGH queue\n", clockVar[0], clockVar[1]);
-					}
+					fprintf(file, "OSS: User process %i started at %ld:%09ld in HIGH queue\n", clockVar[0], clockVar[1]);
+					lineCount++;
 					_Exit(1);
-					
 				}
 				
 				//Sets a flag in the bitProc for this entry being used
@@ -526,80 +485,68 @@ int main (int argc, char *argv[]){
 				addProc--;				
 			}
 			
-			for (i = 0; i < resAvailable; i++){
-				if (resources[i].totalReq > 0 && resources[i].usedRes < 10){
-					for (j = 0; j < 20; j++){
-						if (resources[i].reqList[j] > 0){
-							turn[0].grantedRes[j] = i;
-							turn[0].turn = j;
-							turn[0].turnAck = -1;
-							fprintf(file, "Granting R%i to P%i\n", i, j);
-							
-							//Printing Info
-							/*
-							fprintf(file, "Requested Resources\n\n");
-							for (i = 0; i < resAvailable; i++){
-								fprintf(file, "\tR%i", i);
-							}
-							fprintf(file, "\n");
-							for (i = 0; i < 20; i++){
-								
-								//if (pidList[i] > 0){
-								fprintf(file, "P%i", i);
-								for (j = 0; j < resAvailable; j++){
-									fprintf(file, "\t%i", resources[j].reqList[i]);
-								}
-								fprintf(file, "\t%i\n", pidList[i]);
-								//}
-							}
-							fprintf(file, "\n\n");
-							
-							fprintf(file, "Granted Resources\n\n");
-							
-							for (i = 0; i < resAvailable; i++){
-								fprintf(file, "\t R%i", i);
-							}
-							fprintf(file, "\n");
-							for (i = 0; i < 20; i++){
-								fprintf(file, "P%i", i);
-								for (j = 0; j < resAvailable; j++){
-									fprintf(file, "\t%i", resources[j].resArray[i]);
-								}
-								fprintf(file, "\t%i\n", pidList[i]);
-							}
-							
-							*/
-							int loop = 0;
-							//Ending printing of info
-							int whileCount = 0;
-							while (turn[0].turn != -1 && !killStop){
-								loop++;
-								while (turn[0].turnAck > -1 && !killStop){
-									whileCount++;
-									if (whileCount > 10000000){
-										turn[0].turnAck = -1;
-										turn[0].turn = -1;
-									}
-									if (loop == 10000){
-										printf("Stuck in Turn Ack - inner - %i and %i\n", turn[0].turnAck, turn[0].turn);
-									}
-								}
-								
-								if (loop == 10000){
-									printf("Stuck in Turn Ack - outer - %i and %i\n", turn[0].turnAck, turn[0].turn);
-									
-								}
-								if (turn[0].turnAck == -1 || loop == 1000000){
-									turn[0].turn == -1;
-									loop = 0;
-								}
-							}
-							whileCount = 0;
+			
+			//Assigns resources arbitrarily
+			for (j = 0; j < 20; j++){
+				for (i = 0; i < resAvailable; i++){
+					if (resources[i].reqList[j] > 0 && resources[i].usedRes < 10){
+						turn[0].grantList[i][j]++;
+					}
+				}
+				if (verbose){
+					//Prints table upon turn acknowledgement
+					if (lineCount < 1500){
+						fprintf(file, "Granting R%i to P%i\n", i, j);
+						lineCount++;
+						
+						fprintf(file, "Requested Resources\n\n");
+						lineCount++;
+						lineCount++;
+						
+						for (i = 0; i < resAvailable; i++){
+							fprintf(file, "\tR%i", i);
 						}
-						else if (resources[i].reqList[j] > 0 && resources[i].reqList[j] >= (10 - resources[i].usedRes)){
-							deniedRes++;
+						fprintf(file, "\n");
+						lineCount++;
+						
+						for (i = 0; i < 20; i++){
+							
+							fprintf(file, "P%i", i);
+							for (j = 0; j < resAvailable; j++){
+								fprintf(file, "\t%i", resources[j].reqList[i]);
+							}
+							fprintf(file, "\t%i\n", pidList[i]);
+							lineCount++;
+							
+						}
+						fprintf(file, "\n\n");
+						lineCount++;
+						lineCount++;
+						
+						fprintf(file, "Granted Resources\n\n");
+						lineCount++;
+						lineCount++;
+						
+						for (i = 0; i < resAvailable; i++){
+							fprintf(file, "\t R%i", i);
+						}
+						fprintf(file, "\n");
+						lineCount++;
+						
+						for (i = 0; i < 20; i++){
+							fprintf(file, "P%i", i);
+							for (j = 0; j < resAvailable; j++){
+								fprintf(file, "\t%i", resources[j].resArray[i]);
+							}
+							fprintf(file, "\t%i\n", pidList[i]);
+							lineCount++;
 						}
 					}
+					//Ends printing information
+				}
+				turn[0].turn = j;
+				while(turn[0].turn != -1){
+					
 				}
 			}
 			
@@ -610,16 +557,13 @@ int main (int argc, char *argv[]){
 		}
 	}
 	
-	fclose(file);
 	
 	//Closes processes with SIGTERM using shared memory to keep track of PIDs
 	for (i = 0; i < 20; i++){
 		if (pidList[i] > 1){
 			
-			if (logFlag){
-				fprintf(file, "OSS - Cleanup: Closing Process %ld\n", pidList[i]);
-			}
-			
+			fprintf(file, "OSS - Cleanup: Closing Process %ld\n", pidList[i]);
+				
 			fprintf(stderr, "%i: Closing Process: %ld\n", i, pidList[i]);
 			
 			//SIGTERM kill of process to allow cleanup
@@ -632,9 +576,7 @@ int main (int argc, char *argv[]){
 				//Process didn't close properly, error
 				if (killStatus == -1){
 					
-					if (logFlag){
-						fprintf(file, "OSS - Cleanup: Failed to kill Process %ld\n", pidList[i]);
-					}
+					fprintf(file, "OSS - Cleanup: Failed to kill Process %ld\n", pidList[i]);
 					
 					perror("Kill Process Failed");
 					break;
@@ -650,20 +592,14 @@ int main (int argc, char *argv[]){
 				else if(killStatus == pidList[i]){
 					//Process ends normally if WIFEXITED status is true
 					if (WIFEXITED(status)){
-						
-						if (logFlag){
-							fprintf(file, "OSS - Cleanup: Process %ld ended normally\n", pidList[i]);
-						}
+						fprintf(file, "OSS - Cleanup: Process %ld ended normally\n", pidList[i]);
 						
 						fprintf(stderr, "Process %ld ended normally\n", pidList[i]);
 						break;
 					}
 					//Process did not catch signal if WIFSIGNALED status true
 					else if(WIFSIGNALED(status)){
-						
-						if (logFlag){
-							fprintf(file, "OSS - Cleanup: Process %ld ended due to uncaught signal\n", pidList[i]);
-						}
+						fprintf(file, "OSS - Cleanup: Process %ld ended due to uncaught signal\n", pidList[i]);
 						
 						fprintf(stderr, "Process %ld ended because of uncaught signal\n", pidList[i]);
 						break;
@@ -673,6 +609,7 @@ int main (int argc, char *argv[]){
 		}
 	}
 	
+	fclose(file);
 	fprintf(stderr, "Detaching Shared Memory\n");
 	detachandremove(clockID, clockVar);
 	detachandremove(resID, resources);		
