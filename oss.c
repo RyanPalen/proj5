@@ -118,7 +118,7 @@ int main (int argc, char *argv[]){
 	signal(SIGCHLD, SIG_IGN);
 
 	//Command line switches
-	while ((c = getopt(argc, argv, "hl:v:i:s:t:m:")) != -1){
+	while ((c = getopt(argc, argv, "hvi:s:t:m:")) != -1){
 		switch(c){
 			case 'h':
 				fprintf(stderr, "Usage: %s -h -l <filename> -s [integer] -t [integer] -c\n\n", argv[0]);
@@ -315,9 +315,10 @@ int main (int argc, char *argv[]){
 	clockVar[1] = 0;
 	
 	turn[0].turn = -1;
-	turn[0].turnAck = -1;
 	for (i = 0; i < 20; i++){
-		turn[0].grantList[i] = -1;
+		for (j = 0; j < 20; j++){
+			turn[0].grantList[i][j] = 0;
+		}
 	}
 	
 	resAvailable = rand() % (5 + 1 - 3) + 3;
@@ -357,6 +358,10 @@ int main (int argc, char *argv[]){
 	}
 	fprintf(stderr, "\n\n");
 	
+	for (i = 0; i < 20; i++){
+		turn[0].flag[i] = dne;
+	}
+	
 	//Variables for Deadlock Detection
 	int procMatrix[20][resAvailable];
 	int reqMatrix[resAvailable][20];
@@ -369,22 +374,24 @@ int main (int argc, char *argv[]){
 	
 	long printTime = 300;
 	
-	
 	file = fopen("log", "w");
 	
 	while ((time(NULL) - startTime) < maxTime && !killStop && clockTime < maxSimTime){
-		
 		//Code for simulated clock
 		clockTime += incVal;
 			
 		clockVar[0] = clockTime/1000000000;
 		clockVar[1] = clockTime % 1000000000;
 		
-		//usleep(5);
-		
+		/*
+		if (lineCount < 100000){
+			lineCount++;
+			fprintf(file, "Time is: %ld\n", clockTime);
+		}
+		*/
 		//Prints in the log
-		if (verbose){
-			if (clockTime > printTime && lineCount < 1500){
+		if (verbose == 1){
+			if (clockTime > printTime && lineCount < 500){
 				
 				fprintf(file, "Requested Resources\n\n");
 				for (i = 0; i < resAvailable; i++){
@@ -394,14 +401,12 @@ int main (int argc, char *argv[]){
 				lineCount++;
 				for (i = 0; i < 20; i++){
 					
-					//if (pidList[i] > 0){
 					fprintf(file, "P%i", i);
 					for (j = 0; j < resAvailable; j++){
 						fprintf(file, "\t%i", resources[j].reqList[i]);
 					}
 					fprintf(file, "\t%i\n", pidList[i]);
 					lineCount++;
-					//}
 				}
 				fprintf(file, "\n\n");
 				lineCount++;
@@ -428,7 +433,6 @@ int main (int argc, char *argv[]){
 				printTime += clockTime;
 			}
 		}
-		
 		//Checks against the process create time list to increase addProc
 		//addProc keeps track of how many processes need to be added
 		//This is important in case a process using it's quantum extends
@@ -437,15 +441,15 @@ int main (int argc, char *argv[]){
 			addProc++;
 			localTurn++;
 		}
-		
 		//While loop to check if the table has room and if there are processes to be added
-		while (!tableFull && addProc > 0){
-			
+		while (!tableFull && addProc > 0 && !killStop){
+			printf("Add Process Count: %i\n", addProc);
 			//checks to determine if the process table has open room, function below
 			openProc = checkProcTable(bitProc, 20);
 			
 			if (openProc == -1){
-				fprintf(file, "OSS: Checked at &ld:&ld and found Process Table full\n", clockVar[0], clockVar[1]);
+				fprintf(stderr, "OSS: Checked at %ld:%09ld and found Process Table full\n", clockVar[0], clockVar[1]);
+				fprintf(file, "OSS: Checked at %ld:%09ld and found Process Table full\n", clockVar[0], clockVar[1]);
 				lineCount++;
 				tableFull = 1;
 			}
@@ -458,6 +462,9 @@ int main (int argc, char *argv[]){
 					perror("Failed to Fork");
 					_Exit(0);
 				}
+				
+				fprintf(file, "OSS: User process %i started at %ld:%09ld\n", openProc, clockVar[0], clockVar[1]);
+				lineCount++;
 				
 				//Executes the user process
 				if (childPID == 0){
@@ -473,8 +480,7 @@ int main (int argc, char *argv[]){
 						
 						_Exit(1);
 					}
-					fprintf(file, "OSS: User process %i started at %ld:%09ld in HIGH queue\n", clockVar[0], clockVar[1]);
-					lineCount++;
+					
 					_Exit(1);
 				}
 				
@@ -484,79 +490,27 @@ int main (int argc, char *argv[]){
 				//Reduces addProc which keeps track of how many processes should be added
 				addProc--;				
 			}
-			
-			
-			//Assigns resources arbitrarily
+		}
+		//Assigns resources arbitrarily
+		if (procCount[0] > 0){
 			for (j = 0; j < 20; j++){
 				for (i = 0; i < resAvailable; i++){
 					if (resources[i].reqList[j] > 0 && resources[i].usedRes < 10){
 						turn[0].grantList[i][j]++;
 					}
 				}
-				if (verbose){
-					//Prints table upon turn acknowledgement
-					if (lineCount < 1500){
-						fprintf(file, "Granting R%i to P%i\n", i, j);
-						lineCount++;
-						
-						fprintf(file, "Requested Resources\n\n");
-						lineCount++;
-						lineCount++;
-						
-						for (i = 0; i < resAvailable; i++){
-							fprintf(file, "\tR%i", i);
-						}
-						fprintf(file, "\n");
-						lineCount++;
-						
-						for (i = 0; i < 20; i++){
-							
-							fprintf(file, "P%i", i);
-							for (j = 0; j < resAvailable; j++){
-								fprintf(file, "\t%i", resources[j].reqList[i]);
-							}
-							fprintf(file, "\t%i\n", pidList[i]);
-							lineCount++;
-							
-						}
-						fprintf(file, "\n\n");
-						lineCount++;
-						lineCount++;
-						
-						fprintf(file, "Granted Resources\n\n");
-						lineCount++;
-						lineCount++;
-						
-						for (i = 0; i < resAvailable; i++){
-							fprintf(file, "\t R%i", i);
-						}
-						fprintf(file, "\n");
-						lineCount++;
-						
-						for (i = 0; i < 20; i++){
-							fprintf(file, "P%i", i);
-							for (j = 0; j < resAvailable; j++){
-								fprintf(file, "\t%i", resources[j].resArray[i]);
-							}
-							fprintf(file, "\t%i\n", pidList[i]);
-							lineCount++;
-						}
-					}
-					//Ends printing information
-				}
-				turn[0].turn = j;
-				while(turn[0].turn != -1){
-					
-				}
-			}
-			
-			if (deniedRes > 10){
 				
+				turn[0].turn = j;
+				int looptemp = 0;
+				while(turn[0].turn != -1 && turn[0].flag[j] != dne && !killStop){
+					looptemp++;
+					if (looptemp > 1000000){
+						looptemp = 0;
+					}
+				}
 			}
-			
 		}
 	}
-	
 	
 	//Closes processes with SIGTERM using shared memory to keep track of PIDs
 	for (i = 0; i < 20; i++){

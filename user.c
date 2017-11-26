@@ -412,11 +412,6 @@ int main (int argc, char *argv[]){
 				
 				//Assign turn to self and enter critical section
 				turn[0].turn = localPID;
-				
-				//code below used for visual reference of what process is in critical section
-				//fprintf(stderr, "%i is currently in critical section\n", localPID);
-				
-				fprintf(stderr, "Process currently in Critical Section: %i\n", localPID);
 
 				//--------------------------------------------------
 				//-----------------Critical Section-----------------
@@ -433,6 +428,7 @@ int main (int argc, char *argv[]){
 					resources[i].resArray[localPID] += turn[0].grantList[i][localPID];
 					resources[i].usedRes += turn[0].grantList[i][localPID];
 					turn[0].grantList[i][localPID] = 0;
+					fprintf(stderr, "P%i: Current R%i owned: %i | %i\n", localPID, i, resOwned[i], resources[i].resArray[localPID]);
 				}
 				
 
@@ -446,17 +442,20 @@ int main (int argc, char *argv[]){
 				//Kills the process if it decides to and sets the flag so other
 				//processes can tell it's finished
 				if (termList[termCount] < convertTime(clockVar[0], clockVar[1]) || killStop){
-					if ((rand() % (15 + 1 - 0) + 0) == 0){
+					if ((rand() % (10 + 1 - 0) + 0) == 0){
 						done = 1;
-						fprintf(stderr, "%i Is Closing - Returning Resources\n", getpid());
+						fprintf(stderr, "%i Is Closing - Returning Resources\nReturning:\n", getpid());
 						
 						for (i = 0; i < resAvailable; i++){
-							resources[i].resArray[localPID] -= resOwned[i];
+							fprintf(stderr, "\tR%i - %i\n", i, resources[i].resArray[localPID]);
+							resources[i].resArray[localPID] = 0;
+							resources[i].reqList[localPID] = 0;
 							resources[i].usedRes -= resOwned[i];
 							turn[0].grantList[i][localPID] = 0;
 							resCount = 0;
 						}
-						turn[0].flag[localPID] = done;
+						turn[0].flag[localPID] = dne;
+						procCount[0]--;
 						pidList[localPID] = 0;
 					}
 					else{
@@ -468,7 +467,7 @@ int main (int argc, char *argv[]){
 		}	
 	
 	//Cleanup
-	procCount[0]-= -1;
+	
 	pidList[localPID] = 0;
 				
 	return 0;
